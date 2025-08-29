@@ -1,0 +1,6 @@
+pipelie
+1 extract introns coords using script in this folder
+2 create intron matrix using script 2 in folder find intron matrix
+3 sort exon and intron coordinates, 
+4 for synonymous mutations do per gene? so can slice together?, must keep all coordinates
+maybe in thise case it is easier to create a huge table like javi/mike
