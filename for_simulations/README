@@ -1,0 +1,27 @@
+from introns:
+subsitutions: need trinucs and alts for intron matrix + positions for s_obs
+possible muts: need positions for l_s binning
+
+from exons
+subsiiutions: need positions for s_obs + positions for n_obs + total count for simulation
+possible muts: need positions for l_s and l_n + positions, trinuc and alt for simulations 
+
+currently have pipeline to output mu = s_obs/l_s - processes ref and target
+but as will use again, probably better to process introns and exons seperatly and save tables?
+but then a lot of merging large tables
+
+pipeline
+1) process introns: (-load intron data for anc and target seq, reverse comp and call subsiiutions
+                     - save intron matrix plus list of positions at same time 
+                     - drop anc seq 
+                     - calculate possible muts ie pos of valid bases x 3)
+
+2) porcess exons: -load anc and target seq, reverse comp fill exons etc
+                  - add trinuc, remove flanks
+                  - call subsitutions and save positions for syn and non syn in one file df?
+                  - drop target seq
+                  - call all possooble subs, save table with trinucs and alts and positions
+
+3) using syn and non syn positions - bin genome base on l_s and l_n and save corresponding,
+then load and merge per bin exon 
+                

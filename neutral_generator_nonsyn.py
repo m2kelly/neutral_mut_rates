@@ -99,10 +99,11 @@ do not need to iterate through possible muts, just if valid base, thn add pos x3
 from MutationMatrixGenerator import MutationMatrixGenerator
 
 class NeutralGenerator(MutationMatrixGenerator):
-    def __init__(self, species,target_species,  possible_species, exon_file, gene_annotations, intron_file, output_dir):
+    def __init__(self, species,target_species,  possible_species, exon_file, gene_annotations, intron_file, output_dir, chr):
         super().__init__(species,  possible_species, exon_file, gene_annotations, output_dir)
         self.intron_file = intron_file
         self.target_species = target_species
+        self.chr = chr
         
     #edititng to add position data before reverse complimenting
     def load_data(self):
@@ -111,6 +112,7 @@ class NeutralGenerator(MutationMatrixGenerator):
         
         self.reconstructed_df = pd.read_csv(self.exon_file, sep='\t', names =header)
         self.reconstructed_df.drop(columns='chr_copy', inplace=True)
+        self.reconstructed_df = self.reconstructed_df[self.reconstructed_df['chr']==self.chr]
         #test 
         #self.reconstructed_df = self.reconstructed_df[:1000]
 
@@ -149,6 +151,7 @@ class NeutralGenerator(MutationMatrixGenerator):
     def load_intron_data(self):
         header = ['chr', 'start', 'end'] + self.possible_species + ['gene', 'strand']
         intron_df = pd.read_csv(self.intron_file, sep="\t", names=header)
+        intron_df = intron_df[intron_df['chr']==self.chr]
         #test 
         #intron_df = intron_df[intron_df['gene'].isin(self.all_exons_df['gene'].values)]
     
@@ -379,9 +382,8 @@ class NeutralGenerator(MutationMatrixGenerator):
                     alt_codon = list(codon)
                     alt_codon[m] = alt
                     alt_codon = ''.join(alt_codon)
-                    mut_type = self.find_mutation_type(codon, alt_codon)
-                    if mut_type == 0:
-                        self.gene_records.append((positions[seq_pos],  alt))
+                    mut_type = self.find_mutation_type(codon, alt_codon) #1 = non-syn, 0=syn
+                    self.gene_records.append((positions[seq_pos],  alt, mut_type))
                                 
         return 
 
@@ -391,13 +393,15 @@ class NeutralGenerator(MutationMatrixGenerator):
         print('finished preprocessing exons')
         self.load_intron_data()
         print('finished preprocessing introns')
-        #self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         l_s = 0
+        l_n =0
         l_s_start = 0
         l_s_end = 0
         bin_s_obs = 0
+        bin_n_obs = 0
         s_obs_per_bin = []
-        bin_size = 20000
+        bin_size = 100000
         self.all_exons_df.sort_values(by =['chr','exon_start'], inplace =True)
         for (gene, strand, chr), gene_exon_df in self.all_exons_df.groupby(["gene","strand","chr"],sort=False):
             
@@ -411,11 +415,18 @@ class NeutralGenerator(MutationMatrixGenerator):
 
             #find synonymous subs
             gene_exon_syn_poss_dicts = {'pos': [r[0] for r in self.gene_records],
-            'alt': [r[1] for r in self.gene_records]}
+            'alt': [r[1] for r in self.gene_records], 'type': [r[2] for r in self.gene_records]}
             gene_exon_poss_muts_df = pd.DataFrame(gene_exon_syn_poss_dicts)
             gene_exon_subs_dict = {'pos': gene_exon_subs, 'alt': gene_exon_subs_alts}
             gene_exon_subs_df = pd.DataFrame(gene_exon_subs_dict)
-            gene_syn_exon_subs_df = gene_exon_subs_df.merge(gene_exon_poss_muts_df, on=['pos','alt'], how = 'inner')
+            
+            gene_exon_subs_df = gene_exon_subs_df.merge(gene_exon_poss_muts_df, on =['pos', 'alt'], how='inner')
+            gene_syn_exon_subs_df = gene_exon_subs_df[gene_exon_subs_df['type']==0]
+            gene_nonsyn_exon_subs_df = gene_exon_subs_df[gene_exon_subs_df['type']==1]
+
+           
+
+            #gene_syn_exon_subs_df = gene_exon_subs_df.merge(gene_exon_poss_muts_df, on=['pos','alt'], how = 'inner')
             
             #extract intron all possible muts
             intron_gene_df = self.intron_df_group.get_group(gene)
@@ -423,7 +434,8 @@ class NeutralGenerator(MutationMatrixGenerator):
             intron_gene_df.apply(lambda row : self.generate_intron_mutations(row['seq'], row['start'], row['end'], row['strand']), axis=1)
             
             #extra list of all pos syn muts in gene (from generate muts in intron and exon)
-            gene_poss_muts = self.intron_poss_subs + list(gene_exon_poss_muts_df['pos']) #keep repeats-means 4 fold syn
+            gene_syn_poss_muts = self.intron_poss_subs + list(gene_exon_poss_muts_df[gene_exon_poss_muts_df['type']==0]['pos']) #keep repeats-means 4 fold syn
+            gene_nonsyn_poss_muts = list(gene_exon_poss_muts_df[gene_exon_poss_muts_df['type']==1]['pos'])
             #print(f'possible syn muts in gene {len(gene_poss_muts)}')
 
             #extron intron subs (all 'syn' so do not need to merge with syn)
@@ -431,6 +443,7 @@ class NeutralGenerator(MutationMatrixGenerator):
             
             #list of positions of all 'syn' subs that happened in gene 
             gene_syn_subs = gene_intron_subs + list(gene_syn_exon_subs_df['pos'])
+            gene_nonsyn_subs = list(gene_nonsyn_exon_subs_df['pos'])
             #print(f'syn subs in gene {len(gene_syn_subs)}')
 
             #sort order of poss muts
@@ -440,30 +453,38 @@ class NeutralGenerator(MutationMatrixGenerator):
             if strand == '-':
                 gene_poss_muts.sort(reverse=True)
             '''
-            gene_poss_muts.sort()
+            gene_syn_poss_muts.sort()
+            gene_nonsyn_poss_muts.sort()
 
             #if start of bin is start of gene, then record start pos
             if l_s ==0:
-                l_s_start = gene_poss_muts[0]
+                l_s_start = gene_syn_poss_muts[0]
 
             #bin gene
-            gene_l_s = len(gene_poss_muts)
+            gene_l_s = len(gene_syn_poss_muts)
             if l_s + gene_l_s < bin_size:
                 l_s += gene_l_s
+                l_n += len(gene_nonsyn_poss_muts)
                 bin_s_obs += len(gene_syn_subs)
+                bin_n_obs += len(gene_nonsyn_subs)
+
             elif l_s + gene_l_s == bin_size:
                 l_s += gene_l_s
+                l_n += len(gene_nonsyn_poss_muts)
                 bin_s_obs += len(gene_syn_subs)
-                l_s_end = max(gene_poss_muts)
-                s_obs_per_bin.append([chr, l_s_start, l_s_end, bin_s_obs])
+                bin_n_obs += len(gene_nonsyn_subs)
+                l_s_end = max(gene_syn_poss_muts)
+                s_obs_per_bin.append([chr, l_s_start, l_s_end, bin_s_obs, l_n, bin_n_obs])
                 l_s =0
                 bin_s_obs =0
+                l_n = 0
+                bin_n_obs =0 
                 
             else:
                 while l_s + gene_l_s > bin_size:
                     #first bin from start of gene_df (or remaining gene_df)
                     bin1_gene_l_s = bin_size - l_s
-                    l_s_end = gene_poss_muts[bin1_gene_l_s-1] #not sure about -1
+                    l_s_end = gene_syn_poss_muts[bin1_gene_l_s-1] #not sure about -1
                     #choose how to deal with mut at cut off positions (as 3 possibble muts not ordered)
                     #find s_obs for part of gene in bin1, start fog ene depends on strand!
                     '''
@@ -474,61 +495,59 @@ class NeutralGenerator(MutationMatrixGenerator):
                     '''
                     bin1_syn_subs = [x for x in gene_syn_subs if x<l_s_end]
                     bin_s_obs +=  len(bin1_syn_subs)
-                    s_obs_per_bin.append([chr, l_s_start, l_s_end, bin_s_obs]) 
+
+                    bin1_nonsyn_subs = [x for x in gene_nonsyn_subs if x<l_s_end]
+                    bin_n_obs +=  len(bin1_nonsyn_subs)
+
+                    bin1_nonsyn_poss_muts = [x for x in gene_nonsyn_poss_muts if x<l_s_end]
+                    l_n = len(bin1_nonsyn_poss_muts)
+
+                    s_obs_per_bin.append([chr, l_s_start, l_s_end, bin_s_obs, l_n, bin_n_obs]) 
                     
-                    #reset subs and poss muts, removing binned section
-                    gene_poss_muts = gene_poss_muts[bin1_gene_l_s:] #keep unbinned muts
+                    #reset syn subs and poss muts, removing binned section
+                    gene_syn_poss_muts = gene_syn_poss_muts[bin1_gene_l_s:] #keep unbinned muts
                     gene_syn_subs = [x for x in gene_syn_subs if x not in bin1_syn_subs]
-                    l_s_start = gene_poss_muts[0]
+                    l_s_start = gene_syn_poss_muts[0]
                     l_s = 0
-                    gene_l_s = len(gene_poss_muts)
+                    gene_l_s = len(gene_syn_poss_muts)
                     bin_s_obs =0
+
+                    #reset nonsyn
+                    gene_nonsyn_subs = [x for x in gene_nonsyn_subs if x not in bin1_nonsyn_subs]
+                    gene_nonsyn_poss_muts = [x for x in gene_nonsyn_poss_muts if x not in bin1_nonsyn_poss_muts]
+                    l_n  = 0
+                    bin_n_obs = 0
                  #keep making more bins in gene ie repeat loop above
 
                 
                 #now reset and calculate for last bin in gene
                 bin_s_obs = len(gene_syn_subs) 
                 l_s =  gene_l_s
+                bin_n_obs = len(gene_nonsyn_subs)
+                l_n = len(gene_nonsyn_poss_muts)
                 #CHECK WETHER NEED ANOTHER BIN  IN GENE, keep doing loop
             #print(s_obs_per_bin)
         df = pd.DataFrame({'chr':[x[0] for x in s_obs_per_bin],
                      'bin_start':[x[1] for x in s_obs_per_bin],
                      'bin_end':[x[2] for x in s_obs_per_bin],
-                     's_obs':[x[3] for x in s_obs_per_bin]})
+                     's_obs':[x[3] for x in s_obs_per_bin],
+                     'l_n':[x[4] for x in s_obs_per_bin],
+                     'n_obs':[x[5] for x in s_obs_per_bin]})
         print(df)
-        df.to_csv(self.output_dir,index=False)
+        df.to_csv(self.output_dir/self.chr,index=False)
         
-  
+#should run per chromosome 
 species = 'Anc4'
 target_species = 'hg38'
 possible_species = ['hg38',  'GCA_028858775', 'Anc4']
 exon_file = '/home/maria/cactus_target_size/auxillary/extracted_df2.bed'
 intron_file = '/home/maria/synon_mut_rates/auxillary/introns_genes.bed'
 gene_annotations = '/home/maria/filter_transcripts/output/exon_merged_ids_sort.bed'
-output_dir = '/home/maria/synon_mut_rates/auxillary/neutral_muts'
+output_dir = '/home/maria/synon_mut_rates/auxillary/neutral_muts_dn_ds_test'
+for chr in [f'chr{x}' for x in (list(range(1,23))+['X','Y'])]:
+    generator = NeutralGenerator(species, target_species, possible_species, exon_file, gene_annotations, intron_file,output_dir,chr)
+    generator.run()
 
-generator = NeutralGenerator(species, target_species, possible_species, exon_file, gene_annotations, intron_file,output_dir)
-generator.run()
-
-
-#test function 
-'''
-import pandas as pd
-exon_df = pd.DataFrame({'exon_start':[1,1,1,10,10], 'exon_end': [8,8,8,18, 18],'start':[1,5, 6,10,15], 'end':[5,7,8,12, 17], 'hg38':['AAAA', 'GG','CC','TT','G'], 'other':[1,1,1,3,3], 'chr':[1,1,1,3,3]})
-exon_df.to_csv('/home/maria/test.bed')
-exon_annot_df = pd.DataFrame({'exon_start':[1,1,1,10,10, 20], 'exon_end': [8,8,8,18, 18, 25], 'gene':[1,1,1,3,3,3], 'chr':[1,1,1,3,3,3]})
-exon_annot_df.to_csv('/home/maria/test_a.bed')
-
-species = 'hg38'
-possible_species = ['hg38']
-exon_file = '/home/maria/test.bed'
-gene_annotations = '/home/maria/test_a.bed'
-output_dir = '/home/maria/non_syn_target_test'
-
-generator = MutationMatrixGenerator(species, possible_species, exon_file, gene_annotations, output_dir)
-generator.run()
-
-'''
 
 #cp /home/maria/cactus_target_size/scripts/MutationMatrixGenerator.py /home/maria/synon_mut_rates/scripts/MutationMatrixGenerator.py
 
@@ -537,3 +556,4 @@ generator.run()
 #mut rate per base = 2x10^-3
 
 #E[mut per bin] = 40
+# %%
