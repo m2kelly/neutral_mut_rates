@@ -1,0 +1,18 @@
+nohup: ignoring input
+reconstructed genes = 19076
+finished preprocessing exons
+finished preprocessing introns
+        chr  bin_start   bin_end  s_obs
+0      chr1     924436    932255     52
+1      chr1     932255    940705     49
+2      chr1     940705    950716     70
+3      chr1     950717    962283     75
+4      chr1     962284    974413     52
+...     ...        ...       ...    ...
+79157  chrY   23184072  23198160    148
+79158  chrY   23198160  23227727     37
+79159  chrY   23227727  24807100     51
+79160  chrY   24807101  24837224     25
+79161  chrY   24837224  24851932     76
+
+[79162 rows x 4 columns]

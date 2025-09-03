@@ -2,6 +2,7 @@
 import pandas as pd
 from pathlib import Path
 from itertools import chain
+import numpy as np
 import json
 #think should redo seq etraction, combining eon and exon end first-
 # as causing contiuous extraction in extracted exon seqs (ie exon plus codon), 
@@ -155,12 +156,12 @@ class NeutralGenerator(MutationMatrixGenerator):
                 intron_df.rename(columns={speci : 'target_seq'}, inplace=True)
             else:
                 intron_df.drop(columns=[speci], inplace=True)
-        intron_df['positions'] = intron_df.apply(lambda row : range(row['start'], row['end']),axis=1)
+        #intron_df['positions'] = intron_df.apply(lambda row : range(row['start'], row['end']),axis=1)
         
         rc_intron_df = self.apply_reverse_complement_seq_target(intron_df)
-        rc_intron_df['positions'] = rc_intron_df.apply(lambda row: row['positions'][::-1] if row['strand'] == '-' else row['positions'],axis=1)
-        rc_intron_df[['subs','subs_alts']] = rc_intron_df.apply(lambda row : pd.Series(self.find_subs(row['seq'], row['target_seq'], row['positions'])),axis=1)
-        rc_intron_df.drop(columns='target_seq', inplace=True)
+        #rc_intron_df['positions'] = rc_intron_df.apply(lambda row: row['positions'][::-1] if row['strand'] == '-' else row['positions'],axis=1)
+        rc_intron_df['subs'] = rc_intron_df.apply(lambda row : self.find_subs_intron(row['seq'], row['target_seq'], row['start'], row['end'], row['strand']),axis=1)
+        rc_intron_df.drop(columns='target_seq',inplace=True)
         self.intron_df_group = rc_intron_df.groupby('gene')
 
 
@@ -174,6 +175,39 @@ class NeutralGenerator(MutationMatrixGenerator):
         df = df[df['seq']!=df['target_seq']]
         vals = df[['positions','target_seq']].to_numpy()
         return vals[:,0].tolist(), vals[:,1].tolist()
+    
+    
+    def find_subs_intron(self, seq, target_seq, start, end, strand):
+        df = pd.DataFrame({'seq':list(seq), 'target_seq':list(target_seq)})
+        ok = df[['seq', 'target_seq']].isin(['A', 'C', 'G', 'T'])
+        # rows where ALL species are valid
+        valid_rows = ok.all(axis=1)
+        df =df.loc[valid_rows, :]
+        df = df[df['seq']!=df['target_seq']]
+        if strand == '+':
+            pos = [start + x for x in list(df.index)]
+        if strand == '-':
+            pos = [end - x for x in list(df.index)]
+        return pos
+    
+    
+    #chatgpt sugestion, not convinced
+    def find_subs_intron_array(self, seq, target_seq, start, end, strand):
+        # Convert sequences to numpy arrays of single characters
+        seq_arr = np.frombuffer(seq.encode("ascii"), dtype="S1")
+        tgt_arr = np.frombuffer(target_seq.encode("ascii"), dtype="S1")
+
+        # Mask: only valid bases AND different
+        valid = np.isin(seq_arr, [b"A", b"C", b"G", b"T"]) & np.isin(tgt_arr, [b"A", b"C", b"G", b"T"])
+        mask = valid & (seq_arr != tgt_arr)
+
+        idx = np.nonzero(mask)[0]
+
+        if strand == '+':
+            return (start + idx).tolist()
+        else:  # strand == '-'
+            return (end - idx).tolist()
+
         '''
         if len(df)>1:
             return df['positions'].values, df['target_seq'].values
@@ -297,15 +331,32 @@ class NeutralGenerator(MutationMatrixGenerator):
         return seq,  positions, subs, subs_alts
 
     #note for introns do not need to iterate by codon, as all muts are synon
-    def generate_intron_mutations(self, seq, positions):
+    def generate_intron_mutations1(self, seq, start, end, strand):
         for i in range(0, len(seq) - 2):
             ref_base = seq[i]
             if ref_base not in self.bases:
                 continue
-            self.intron_poss_subs.append(positions[i])
-            self.intron_poss_subs.append(positions[i])
-            self.intron_poss_subs.append(positions[i])
+            self.intron_poss_subs.append(3*[i+start] if strand == '+' else 3*[end-i])
         return
+    
+    
+    #or work with numpy vectorised version
+    def generate_intron_mutations(self, seq, start, end, strand):
+        seq_arr = np.array(list(seq))  # convert string to array of characters
+
+        # Boolean mask for valid bases
+        valid_mask = np.isin(seq_arr, self.bases)
+        idx = np.nonzero(valid_mask)[0]
+
+        # Compute positions based on strand
+        if strand == '+':
+            positions = start + idx
+        else:
+            positions = end - idx
+
+    # Each base has 3 possible mutations
+        self.intron_poss_subs.extend(np.repeat(positions, 3).tolist())
+
         
     #overriding function in mutation matrix generator
     def generate_mutations(self, seq,positions):
@@ -366,7 +417,7 @@ class NeutralGenerator(MutationMatrixGenerator):
             #extract intron all possible muts
             intron_gene_df = self.intron_df_group.get_group(gene)
             self.intron_poss_subs = []
-            intron_gene_df.apply(lambda row : self.generate_intron_mutations(row['seq'], row['positions']), axis=1)
+            intron_gene_df.apply(lambda row : self.generate_intron_mutations(row['seq'], row['start'], row['end'], row['strand']), axis=1)
             
             #extra list of all pos syn muts in gene (from generate muts in intron and exon)
             gene_poss_muts = self.intron_poss_subs + list(gene_exon_poss_muts_df['pos']) #keep repeats-means 4 fold syn
